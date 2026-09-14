@@ -718,8 +718,8 @@ export default function ConfigPage() {
             </div>
             <p className="text-xs text-muted">完成 BOSS 采集后，每次会在设定区间内随机等待一次再投递；默认为 5–15 分钟，单独采集不受影响。</p>
             <Field label="BOSS 单日页面访问总上限">
-              <Input type="number" value={config.safety?.daily_platform_page_limit ?? 1000} onChange={e => updateConfig('safety.daily_platform_page_limit', Number(e.target.value))} min={1} max={2000} />
-              <p className="mt-1 text-xs text-muted">合计 BOSS 搜索页、详情页、自动投递和监测打开的页面；默认 1000 次，可容纳 60 次搜索与 900 次详情，另余 40 次供其他操作使用。其他平台不占用。</p>
+              <Input type="number" value={config.safety?.daily_platform_page_limit ?? 1100} onChange={e => updateConfig('safety.daily_platform_page_limit', Number(e.target.value))} min={1} max={2000} />
+              <p className="mt-1 text-xs text-muted">合计 BOSS 搜索页、详情页、自动投递和监测打开的页面；默认 1100 次，可容纳 60 次搜索与 900 次详情，另余 140 次供其他操作使用。其他平台不占用。</p>
             </Field>
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="每日发送上限">

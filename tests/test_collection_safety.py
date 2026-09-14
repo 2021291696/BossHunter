@@ -24,6 +24,7 @@ class CollectionSafetyTests(unittest.TestCase):
         self.assertNotIn("daily_new_jobs_limit", collection)
         self.assertEqual(collection["daily_search_page_limit"], 60)
         self.assertEqual(collection["daily_detail_page_limit"], 900)
+        self.assertEqual(DEFAULTS["safety"]["daily_platform_page_limit"], 1100)
         self.assertEqual(collection["risk_pause_min_minutes"], 5)
         self.assertEqual(collection["risk_pause_max_minutes"], 10)
         self.assertEqual(collection["collection_delay_multiplier"], 1.5)
@@ -78,12 +79,12 @@ platforms:
                     guard.reserve("detail_page", daily_limit=detail_limit)
                 self.assertEqual(raised.exception.reason, "daily_detail_page_limit")
                 sender = PlatformAccessGuard(db, DEFAULTS, "send")
-                for _ in range(40):
+                for _ in range(140):
                     sender.reserve("job_page")
                 with self.assertRaises(PlatformSafetyStop) as raised:
                     sender.reserve("job_page")
                 self.assertEqual(raised.exception.reason, "daily_platform_page_limit")
-                self.assertEqual(count_platform_access_today(db), 1000)
+                self.assertEqual(count_platform_access_today(db), 1100)
             finally:
                 db.close()
 

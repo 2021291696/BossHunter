@@ -196,7 +196,7 @@ DEFAULTS: dict[str, Any] = {
         "history_file": "./data/history.jsonl",
     },
     "safety": {
-        "daily_platform_page_limit": 1000,
+        "daily_platform_page_limit": 1100,
         "risk_lock_minutes": 10,
     },
     "browser": {
