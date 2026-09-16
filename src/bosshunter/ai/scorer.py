@@ -16,6 +16,7 @@ from bosshunter.db import (
     add_history,
     get_db,
     get_jobs_by_status,
+    job_soft_deleted,
     persist_job_score_and_trace,
     reset_ai_filtered_jobs,
     update_job_quick_score,
@@ -803,6 +804,17 @@ def score_jobs(
             for job in pending_jobs:
                 if stop_event is not None and stop_event.is_set():
                     break
+                # 岗位可能在评分启动后被用户移入回收站（轻操作已与后台任务解耦），
+                # 逐个处理前重查，避免给已删岗位消耗 AI 评分额度。
+                if job_soft_deleted(db, str(job["id"])):
+                    processed += 1
+                    mark_completed(str(job["id"]))
+                    progress.update(
+                        task,
+                        advance=1,
+                        description=f"评分中 ({processed}/{len(pending_jobs)}) [已删除跳过]",
+                    )
+                    continue
                 qs, qs_reason = quick_score(job, config)
                 update_job_quick_score(db, job["id"], qs)
                 if qs == 0:

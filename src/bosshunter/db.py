@@ -135,6 +135,14 @@ def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
     return row is not None
 
 
+def job_soft_deleted(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Check if a job is currently in the recycle bin (soft-deleted)."""
+    row = conn.execute(
+        "SELECT 1 FROM jobs WHERE id = ? AND deleted_at IS NOT NULL", (job_id,)
+    ).fetchone()
+    return row is not None
+
+
 def job_identity_exists(
     conn: sqlite3.Connection,
     source_platform: str,
