@@ -131,7 +131,11 @@ class CollectionOrchestratorTests(TestCase):
                 insert_job(db, {**_candidate("boss", "duplicate").as_job_record()})
             finally:
                 db.close()
-            config = {"profile": {"deal_breakers": ["黑名单词"]}}
+            config = {
+                "profile": {"deal_breakers": ["黑名单词"]},
+                # 本用例固化的是串行队列语义；并行调度由 test_collection_parallel.py 覆盖。
+                "collection": {"parallelism": 1},
+            }
             real_insert = __import__("bosshunter.db", fromlist=["insert_job_if_new"]).insert_job_if_new
 
             def insert(record_conn, record):
@@ -190,7 +194,7 @@ class CollectionOrchestratorTests(TestCase):
             "zhilian": lambda: _FakeCollector("zhilian", events, [_candidate("zhilian", "two")]),
         })
         with tempfile.TemporaryDirectory() as tmp:
-            config = {"_workbench_stop_event": stop_event}
+            config = {"_workbench_stop_event": stop_event, "collection": {"parallelism": 1}}
             with patch("bosshunter.ai.scorer.score_jobs") as score_jobs:
                 result = CollectionOrchestrator(config, db_path=Path(tmp) / "collection.db", registry=registry).run(
                     _options(order=["boss", "zhilian"], auto_score=True)
@@ -224,7 +228,7 @@ class CollectionOrchestratorTests(TestCase):
         })
         with tempfile.TemporaryDirectory() as tmp:
             result = CollectionOrchestrator(
-                {}, db_path=Path(tmp) / "collection.db", registry=registry
+                {"collection": {"parallelism": 1}}, db_path=Path(tmp) / "collection.db", registry=registry
             ).run(_options(order=["zhilian", "boss"]))
 
         self.assertEqual(events, ["start:zhilian"])
