@@ -11,13 +11,15 @@ from copy import deepcopy
 import re
 from typing import Any
 
+from bosshunter.config import INTERNSHIP_MODES, resolve_internship_mode
+
 
 AGENT_API_VERSION = "v1"
 PLATFORMS = ("boss", "zhilian", "51job", "liepin")
 _TEXT_LIST_FIELDS = ("keywords", "cities", "deal_breakers", "jd_deal_breakers", "blocked_companies")
 _OPTIONAL_TEXT_FIELDS = ("education", "recruitment_type")
 _ALLOWED_FIELDS = frozenset(
-    (*_TEXT_LIST_FIELDS, *_OPTIONAL_TEXT_FIELDS, "salary", "allow_internship", "score_threshold", "platform_order", "max_pages")
+    (*_TEXT_LIST_FIELDS, *_OPTIONAL_TEXT_FIELDS, "salary", "allow_internship", "internship_mode", "score_threshold", "platform_order", "max_pages")
 )
 _MAX_AGENT_EVALUATIONS = 10
 _GREETING_URL_PATTERN = re.compile(r"(?i)(?:https?://|www\.|[a-z0-9-]+\.[a-z]{2,})(?:/[^\s]*)?")
@@ -120,6 +122,7 @@ def agent_preferences(config: dict[str, Any]) -> dict[str, Any]:
         "education": str(profile.get("education") or ""),
         "recruitment_type": str(profile.get("recruitment_type") or ""),
         "allow_internship": bool(profile.get("allow_internship", False)),
+        "internship_mode": resolve_internship_mode(profile),
         "score_threshold": _number(scoring.get("threshold"), 71),
         "platform_order": platform_order,
         "max_pages": max_pages,
@@ -175,6 +178,12 @@ def apply_preferences(config: dict[str, Any], preferences: Any) -> tuple[dict[st
         if not isinstance(preferences["allow_internship"], bool):
             raise AgentRequestError("allow_internship 必须是布尔值")
         profile["allow_internship"] = preferences["allow_internship"]
+
+    if "internship_mode" in preferences:
+        mode = str(preferences["internship_mode"] or "").strip().lower()
+        if mode not in INTERNSHIP_MODES:
+            raise AgentRequestError("internship_mode 必须是 exclude/allow/only 之一")
+        profile["internship_mode"] = mode
 
     if "score_threshold" in preferences:
         scoring["threshold"] = _validated_number("score_threshold", preferences["score_threshold"], 0, 100)

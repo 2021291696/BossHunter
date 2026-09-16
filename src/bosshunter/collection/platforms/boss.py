@@ -124,6 +124,21 @@ def build_boss_filter_query(filters: Any) -> str:
         query[BOSS_FILTER_PARAMS[key]] = ",".join(encoded_values)
     return urlencode(query)
 
+
+def apply_internship_mode_filter(filters: Any, profile: Any) -> dict[str, list[str]]:
+    """Return collection filters with the internship search filter forced on.
+
+    "只要实习"（only）模式下在搜索期直接附加职位类型=实习，避免拉回大量
+    全职岗再被预筛丢弃、白烧搜索页额度；用户已手动选择实习时不重复注入。
+    """
+    from bosshunter.config import resolve_internship_mode
+
+    normalized = normalize_boss_search_filters(filters)
+    mode = resolve_internship_mode(profile if isinstance(profile, dict) else {})
+    if mode == "only" and not normalized.get("job_type"):
+        normalized["job_type"] = ["实习"]
+    return normalized
+
 JS_EXTRACT_LIST = """
 (() => {
     const wraps = document.querySelectorAll('.job-card-wrap');
@@ -476,7 +491,8 @@ class BossCollector:
                         return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                     hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
                     search_url = SEARCH_URL.format(keyword=quote(keyword), city_code=city_code)
-                    filter_query = build_boss_filter_query(request.filters)
+                    collection_profile = self.config.get("profile") if isinstance(self.config.get("profile"), dict) else {}
+                    filter_query = build_boss_filter_query(apply_internship_mode_filter(request.filters, collection_profile))
                     if filter_query: search_url += f"&{filter_query}"
                     if request.sort == "newest": search_url += "&sortType=2"
                     if page > 1: search_url += f"&page={page}"

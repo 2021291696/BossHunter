@@ -78,6 +78,7 @@ DEFAULTS: dict[str, Any] = {
         "salary_ceil_ratio": 1.5,
         "filter_unparsed_salary": True,
         "allow_internship": False,
+        "internship_mode": "",
         "deal_breakers": [],
         "jd_deal_breakers": [],
         "blocked_companies": [],
@@ -216,6 +217,22 @@ def credentials_path_for(config_path: Path | None = None) -> Path:
     config_path = Path(config_path or "config.yaml")
     stem = config_path.stem.lstrip(".") or "config"
     return config_path.with_name(f".{stem}.credentials.yaml")
+
+
+INTERNSHIP_MODES = ("exclude", "allow", "only")
+
+
+def resolve_internship_mode(profile: dict[str, Any] | None) -> str:
+    """Resolve the three-way internship policy from a profile dict.
+
+    ``internship_mode`` wins when set; otherwise fall back to the legacy
+    boolean ``allow_internship`` (true → allow, false/absent → exclude).
+    """
+    profile = profile or {}
+    mode = str(profile.get("internship_mode") or "").strip().lower()
+    if mode in INTERNSHIP_MODES:
+        return mode
+    return "allow" if profile.get("allow_internship", False) is True else "exclude"
 
 
 def load_config(config_path: Path | None = None) -> dict[str, Any]:
