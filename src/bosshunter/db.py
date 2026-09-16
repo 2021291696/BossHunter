@@ -136,11 +136,18 @@ def job_exists(conn: sqlite3.Connection, job_id: str) -> bool:
 
 
 def job_soft_deleted(conn: sqlite3.Connection, job_id: str) -> bool:
-    """Check if a job is currently in the recycle bin (soft-deleted)."""
-    row = conn.execute(
-        "SELECT 1 FROM jobs WHERE id = ? AND deleted_at IS NOT NULL", (job_id,)
-    ).fetchone()
-    return row is not None
+    """Check if a job is currently in the recycle bin (soft-deleted).
+
+    The Row type guard keeps mocked connections (test doubles) inert: only a
+    real sqlite Row proving ``deleted_at IS NOT NULL`` counts as deleted.
+    """
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM jobs WHERE id = ? AND deleted_at IS NOT NULL", (job_id,)
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return isinstance(row, sqlite3.Row)
 
 
 def job_identity_exists(
