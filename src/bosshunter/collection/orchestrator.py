@@ -411,6 +411,8 @@ class CollectionOrchestrator:
                         else Job51Collector(config=self.config, safety_conn=platform_conn)
                         if platform == "51job" and self._uses_default_registry
                         else ZhilianCollector(config=self.config, safety_conn=platform_conn)
+                        if platform == "zhilian" and self._uses_default_registry
+                        else LiepinCollector(config=self.config, safety_conn=platform_conn)
                         if platform == "liepin" and self._uses_default_registry
                         else self.registry.get(platform)
                     )
