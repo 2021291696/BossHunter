@@ -1,0 +1,69 @@
+# BossHunter v2.4.0 更新验收 全流程测试清单
+# 背景：2026-09-11 从 v2.3.2 更新到 v2.4.0（落后 106 commits），本地补丁重打 3 处、弃 1 处（job51 被官方重写）
+# 只读验收：采集/评分/打招呼/发送均对真实平台有副作用，不纳入本清单
+# 注意：run.py 变量替换为 {var} 正则，命令里出现花括号（如 curl -w "%{http_code}"）会被误替换，故用 python urllib
+name: BossHunter-v2.4.0-update-acceptance
+target:
+  platform: cli                      # CLI 型目标；门2 记 N/A 并披露
+  app: { project: "D:\\MyAIWorkspace\\tools\\BossHunter" }
+
+environment:
+  start: manual                      # 三组件已由编排层启动（web 8686 + Chrome 9222 + runtime 3456），run.py 只复验
+
+# 无 fork/分叉：BossHunter 核心流程（scrape→score→greet→send）无问答题分支，且真实执行有副作用
+review: off                          # 门0 记 SKIPPED：官方 v2.4.0 自带 60+ 测试文件（覆盖率 85-100%），
+                                     # 本次改动=官方代码+3 处历史回归过的本地补丁；全量 pytest 为验收信号
+
+diagnosis:
+  logs:
+    - { name: web, path: "web-server.log", error_patterns: ["ERROR", "Traceback"] }
+
+flow:
+  steps:
+    - id: web_panel_ready
+      cli:
+        cmd: ["uv", "run", "python", "-c", "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8686/',timeout=3).status)"]
+        cwd: "D:/MyAIWorkspace/tools/BossHunter"
+        timeout_s: 30
+      assert:
+        - { text_contains: "200" }
+
+    - id: chrome_cdp_ready
+      cli:
+        cmd: ["uv", "run", "python", "-c", "import json,urllib.request;print(json.load(urllib.request.urlopen('http://127.0.0.1:9222/json/version',timeout=3))['Browser'])"]
+        cwd: "D:/MyAIWorkspace/tools/BossHunter"
+        timeout_s: 30
+      assert:
+        - { text_contains: "Chrome/" }
+
+    - id: runtime_ready
+      cli:
+        cmd: ["uv", "run", "python", "-c", "import json,urllib.request;d=json.load(urllib.request.urlopen('http://127.0.0.1:3456/health',timeout=3));print(d['runtime'],d['connected'],d['browserName'])"]
+        cwd: "D:/MyAIWorkspace/tools/BossHunter"
+        timeout_s: 30
+      assert:
+        - { text_contains: "bosshunter True Google Chrome" }
+
+    - id: pytest_full
+      cli:
+        cmd: ["C:/Program Files/Git/bin/bash.exe", "-lc", "uv run pytest -q 2>&1 | tail -8"]
+        cwd: "D:/MyAIWorkspace/tools/BossHunter"
+        timeout_s: 600
+      assert:
+        - { text_contains: "passed" }
+
+    - id: version_check
+      cli:
+        cmd: ["C:/Program Files/Git/bin/bash.exe", "-lc", "grep '^version' pyproject.toml"]
+        cwd: "D:/MyAIWorkspace/tools/BossHunter"
+        timeout_s: 15
+      assert:
+        - { text_contains: "2.4.0" }
+
+    - id: status_full
+      cli:
+        cmd: ["C:/Program Files/Git/bin/bash.exe", "-lc", "uv run bosshunter status --full 2>&1"]
+        cwd: "D:/MyAIWorkspace/tools/BossHunter"
+        timeout_s: 120
+      assert:
+        - { status: 0 }
