@@ -52,6 +52,9 @@ from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={area}&keyword={keyword}"
 API_SEARCH_URL = "https://we.51job.com/api/job/search-pc"
+# 51job 原生「工作类型·实习」筛选：jobType=03（实测验证）。
+# 该参数只表达「只要实习」，仅在 internship_mode == "only" 时注入。
+INTERNSHIP_JOB_TYPE_PARAM = "jobType=03"
 API_PAGE_SIZE = 20        # 每页条数（API 上限 20，实测稳定）
 API_FETCH_TIMEOUT = 25.0  # 单次 fetch 超时（秒）
 
@@ -173,7 +176,7 @@ JS_FETCH_API_PAGE = r"""
 (async function () {
     try {
         var url = '""" + API_SEARCH_URL + r"""?api_key=51job&timestamp=' + Date.now() +
-            '&keyword=__KW__&searchType=2&jobArea=__AREA__&pageNum=__PAGE__&pageSize=""" + str(API_PAGE_SIZE) + r"""&sortType=0&source=1&scene=7';
+            '&keyword=__KW__&searchType=2&jobArea=__AREA__&pageNum=__PAGE__&pageSize=""" + str(API_PAGE_SIZE) + r"""&sortType=0&source=1&scene=7__JOBTYPE__';
         var resp = await fetch(url, {
             headers: { 'Accept': 'application/json, text/plain, */*' },
             credentials: 'include'
@@ -298,6 +301,29 @@ def _is_internship(title: str, experience: str) -> bool:
     """判断岗位是否为实习/管培（只查标题，experience 的「无需经验」会误伤 entry-level）。"""
     t = (title or "").lower()
     return any(s in t for s in _INTERNSHIP_TITLE_TERMS)
+
+
+def internship_search_suffix(profile: Any) -> str:
+    """only 模式下返回 51job 原生「工作类型·实习」筛选参数后缀，其余模式返回空串。
+
+    与 boss.apply_internship_mode_filter 同一策略：只有 internship_mode == "only"
+    才注入平台原生实习筛选，exclude/allow 模式下 URL 与现状完全一致。
+    """
+    from bosshunter.config import resolve_internship_mode
+
+    mode = resolve_internship_mode(profile if isinstance(profile, dict) else {})
+    return f"&{INTERNSHIP_JOB_TYPE_PARAM}" if mode == "only" else ""
+
+
+def render_fetch_api_js(kw_encoded: str, area: str, page: int | str, profile: Any = None) -> str:
+    """渲染 API fetch 脚本；only 模式下把 __JOBTYPE__ 替换为原生实习筛选参数。"""
+    return (
+        JS_FETCH_API_PAGE
+        .replace("__KW__", kw_encoded)
+        .replace("__AREA__", str(area))
+        .replace("__PAGE__", str(page))
+        .replace("__JOBTYPE__", internship_search_suffix(profile))
+    )
 
 
 def _salary_within_range(salary: str, salary_min: float, salary_max: float) -> bool:
@@ -630,14 +656,17 @@ class Job51Collector:
                 if not candidate_target:
                     continue
                 try:
-                    alive_js = JS_FETCH_API_PAGE.replace("__KW__", quote(keyword)).replace("__AREA__", code).replace("__PAGE__", "1")
+                    alive_js = render_fetch_api_js(
+                        quote(keyword), code, 1, profile=self.config.get("profile"),
+                    )
                     alive = self.browser.evaluate(candidate_target, alive_js, timeout=8)
                     if alive and "error" not in str(alive):
                         return str(candidate_target), False
                 except Exception:
                     continue
 
-        tmp_url = SEARCH_URL.format(area=code, keyword=quote(keyword))
+        # only 模式：宿主搜索页 URL 同样带上原生实习筛选（其余模式与现状一致）
+        tmp_url = SEARCH_URL.format(area=code, keyword=quote(keyword)) + internship_search_suffix(self.config.get("profile"))
         host_target = self.browser.new_tab(tmp_url, background=False)
         if not host_target:
             raise CollectionBlockedError("rate_limit", "无法打开 51job 页面作为 API 宿主")
@@ -646,7 +675,7 @@ class Job51Collector:
 
     def _fetch_page(self, host_target: str, kw_encoded: str, area: str, page: int) -> dict:
         """在宿主页上下文发一次 API 请求并分析返回，返回 _analyze_api_response 结果。"""
-        js = JS_FETCH_API_PAGE.replace("__KW__", kw_encoded).replace("__AREA__", area).replace("__PAGE__", str(page))
+        js = render_fetch_api_js(kw_encoded, area, page, profile=self.config.get("profile"))
         raw = self.browser.evaluate(host_target, js, timeout=API_FETCH_TIMEOUT)
         if raw is None:
             return {"ok": False, "level": 3, "signal": "empty_result",
