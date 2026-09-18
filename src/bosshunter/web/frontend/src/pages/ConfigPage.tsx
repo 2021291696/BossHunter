@@ -689,6 +689,10 @@ export default function ConfigPage() {
               <Field label="BOSS 单日详情页尝试上限">
                 <Input type="number" value={config.collection?.daily_detail_page_limit ?? 150} onChange={e => updateConfig('collection.daily_detail_page_limit', Number(e.target.value))} min={1} max={500} />
               </Field>
+              <Field label="平台采集并发路数">
+                <Input type="number" value={config.collection?.parallelism ?? 1} onChange={e => updateConfig('collection.parallelism', Number(e.target.value))} min={0} max={4} />
+                <p className="mt-1 text-xs text-muted">1 = 平台间串行（默认，最保守）；0 = 全部启用平台并行；N = 最多 N 路。只改平台间的调度方式，各平台自身的节奏与额度不变。</p>
+              </Field>
               <Field label="BOSS 连续页面失败停止阈值">
                 <Input type="number" value={config.collection?.max_consecutive_page_failures ?? 3} onChange={e => updateConfig('collection.max_consecutive_page_failures', Number(e.target.value))} min={1} max={10} />
               </Field>

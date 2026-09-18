@@ -516,16 +516,21 @@ class CollectionOrchestrator:
         }
 
     def _resolve_parallelism(self, platform_count: int) -> int:
-        """0/absent = run all enabled platforms in parallel; 1 = legacy serial; N = capped lanes."""
+        """1/default = serial (conservative); 0 = all enabled platforms in parallel; N = capped lanes.
+
+        Only the intra-schedule shape changes; per-platform pacing, budgets and
+        risk-control behaviour stay untouched.
+        """
         collection_cfg = self.config.get("collection", {}) if isinstance(self.config.get("collection"), dict) else {}
+        raw = collection_cfg.get("parallelism", 1)
         try:
-            value = int(collection_cfg.get("parallelism", 0) or 0)
+            value = int(raw)
         except (TypeError, ValueError):
-            value = 0
-        if value == 1:
-            return 1
-        if value <= 0:
+            value = 1
+        if value == 0:
             return max(1, platform_count)
+        if value <= 1:
+            return 1
         return max(1, min(value, platform_count))
 
     @staticmethod
