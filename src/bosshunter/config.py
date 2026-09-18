@@ -102,6 +102,9 @@ DEFAULTS: dict[str, Any] = {
         "collection_delay_multiplier": 1.5,
         "delivery_cooldown_min_minutes": 5,
         "delivery_cooldown_max_minutes": 15,
+        # 平台间并发采集路数：1 = 串行（默认，安全保守），0 = 所有启用平台并行，
+        # N = 最多 N 路。只影响平台间的调度方式，各平台自身的节奏/额度/风控参数不变。
+        "parallelism": 1,
     },
     "platforms": {
         "boss": {

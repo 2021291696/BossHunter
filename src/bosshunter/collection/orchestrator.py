@@ -1,10 +1,11 @@
-"""Shared filtering, atomic persistence and strictly serial collection queue."""
+"""Shared filtering, atomic persistence and configurable parallel collection queue."""
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -320,6 +321,9 @@ class CollectionOrchestrator:
         self.run_id = run_id or str(uuid4())
         self.task_id = task_id
         self.stop_event = config.get("_workbench_stop_event")
+        # 并行采集时保护 states / all_new_ids 的跨线程读写；平台各自的
+        # SQLite 连接与 persist（按路径自开连接）依赖 SQLite 自身写锁串行。
+        self._shared_lock = Lock()
 
     def run(self, raw_options: dict[str, Any] | None = None) -> dict[str, Any]:
         resume_id = raw_options.get("resume_run_id") if isinstance(raw_options, dict) else None
@@ -352,18 +356,28 @@ class CollectionOrchestrator:
             checkpoint_pages[boss_combo_key(city, keyword)] = page
             save_boss_checkpoint(conn, self.run_id, checkpoint_pages)
 
-        try:
-            for index, platform in enumerate(order, start=1):
-                if self.stop_event is not None and self.stop_event.is_set():
-                    states[platform]["status"] = "stopped"
-                    states[platform]["reason_code"] = "user_stopped"
-                    break
-                raw = options["platforms"][platform]
-                request = PlatformCollectionRequest(platform=platform, **raw)
-                states[platform]["status"] = "running"
+        def queue_wide_stop(result: PlatformCollectionResult) -> bool:
+            """A queue-wide halt: unknown/risk block, user stop, or browser loss.
+
+            login_required stays platform-local so later platforms still run.
+            """
+            return (
+                (result.status == "blocked" and result.reason_code != "login_required")
+                or result.reason_code in {"user_stopped", "browser_disconnected"}
+                or (self.stop_event and self.stop_event.is_set())
+            )
+
+        def run_platform(index: int, platform: str) -> PlatformCollectionResult:
+            """Execute one platform collector end-to-end with its own DB connection."""
+            raw = options["platforms"][platform]
+            request = PlatformCollectionRequest(platform=platform, **raw)
+            platform_conn = get_db(self.db_path)
+            try:
+                with self._shared_lock:
+                    states[platform]["status"] = "running"
                 self._persist(states, all_new_ids, platform, status="running")
                 processor = _SharedProcessor(
-                    conn, request, run_id=self.run_id, platform_index=index, platform_total=len(order),
+                    platform_conn, request, run_id=self.run_id, platform_index=index, platform_total=len(order),
                     stop_event=self.stop_event, config=self.config,
                     emit=lambda progress, p=platform, processor_ref=None: self._emit(
                         states, p, progress, all_new_ids, processor_ref.new_job_ids if processor_ref else []
@@ -371,8 +385,9 @@ class CollectionOrchestrator:
                 )
                 if previous:
                     processor.new_job_ids = list(previous["collected_job_ids"])
-                    for name in ("seen", "duplicate", "filtered", "parse_failed", "save_failed"):
-                        setattr(processor.progress, name, int(previous["platform_states"].get(platform, {}).get(name) or 0))
+                    with self._shared_lock:
+                        for name in ("seen", "duplicate", "filtered", "parse_failed", "save_failed"):
+                            setattr(processor.progress, name, int(previous["platform_states"].get(platform, {}).get(name) or 0))
                 prior_save_failures = processor.progress.save_failed
                 # Bind the processor into the callback after construction so the
                 # current platform's progress is not confused with prior IDs.
@@ -391,13 +406,13 @@ class CollectionOrchestrator:
                 )
                 try:
                     collector = (
-                        BossCollector(config=self.config, safety_conn=conn)
+                        BossCollector(config=self.config, safety_conn=platform_conn)
                         if platform == "boss" and self._uses_default_registry
-                        else Job51Collector(config=self.config, safety_conn=conn)
+                        else Job51Collector(config=self.config, safety_conn=platform_conn)
                         if platform == "51job" and self._uses_default_registry
-                        else ZhilianCollector(config=self.config, safety_conn=conn)
+                        else ZhilianCollector(config=self.config, safety_conn=platform_conn)
                         if platform == "zhilian" and self._uses_default_registry
-                        else LiepinCollector(config=self.config, safety_conn=conn)
+                        else LiepinCollector(config=self.config, safety_conn=platform_conn)
                         if platform == "liepin" and self._uses_default_registry
                         else self.registry.get(platform)
                     )
@@ -417,38 +432,63 @@ class CollectionOrchestrator:
                         f"重复 {processor.progress.duplicate} 条，过滤 {processor.progress.filtered} 条，"
                         f"解析失败 {processor.progress.parse_failed} 条，保存失败 {processor.progress.save_failed} 条"
                     )
-                platform_results.append(result)
-                states[platform].update({
-                    "status": result.status,
-                    "new": len(result.new_job_ids),
-                    "percent": processor.progress.percent,
-                    "seen": processor.progress.seen,
-                    "duplicate": processor.progress.duplicate,
-                    "filtered": processor.progress.filtered,
-                    "parse_failed": processor.progress.parse_failed,
-                    "save_failed": processor.progress.save_failed,
-                    "keyword": processor.progress.keyword,
-                    "city": processor.progress.city,
-                    "page": processor.progress.page,
-                    "max_pages": processor.progress.max_pages,
-                    "reason_code": result.reason_code,
-                    "message": result.message,
-                })
-                all_new_ids.extend(result.new_job_ids)
-                self._persist(states, all_new_ids, platform, stop_reason=result.reason_code, error=result.error)
-                # A login wall belongs to the current recruitment platform:
-                # keep its blocked result but let independent later platforms
-                # continue. Other unknown/risk blocks remain queue-wide until
-                # they have an equally explicit platform-local classification.
-                if (
-                    (result.status == "blocked" and result.reason_code != "login_required")
-                    or result.reason_code in {"user_stopped", "browser_disconnected"}
-                    or (self.stop_event and self.stop_event.is_set())
-                ):
-                    break
+                with self._shared_lock:
+                    states[platform].update({
+                        "status": result.status,
+                        "new": len(result.new_job_ids),
+                        "percent": processor.progress.percent,
+                        "seen": processor.progress.seen,
+                        "duplicate": processor.progress.duplicate,
+                        "filtered": processor.progress.filtered,
+                        "parse_failed": processor.progress.parse_failed,
+                        "save_failed": processor.progress.save_failed,
+                        "keyword": processor.progress.keyword,
+                        "city": processor.progress.city,
+                        "page": processor.progress.page,
+                        "max_pages": processor.progress.max_pages,
+                        "reason_code": result.reason_code,
+                        "message": result.message,
+                    })
+                self._persist(states, [*all_new_ids, *result.new_job_ids], platform, stop_reason=result.reason_code, error=result.error)
+                return result
+            finally:
+                platform_conn.close()
+
+        parallelism = self._resolve_parallelism(len(order))
+        try:
+            if parallelism <= 1:
+                # 串行（旧行为）：按顺序执行，遇队列级中断即停。
+                for index, platform in enumerate(order, start=1):
+                    if self.stop_event is not None and self.stop_event.is_set():
+                        states[platform]["status"] = "stopped"
+                        states[platform]["reason_code"] = "user_stopped"
+                        break
+                    result = run_platform(index, platform)
+                    platform_results.append(result)
+                    with self._shared_lock:
+                        all_new_ids.extend(result.new_job_ids)
+                    if queue_wide_stop(result):
+                        break
+            else:
+                # 平台间并行：各平台线程独立 DB 连接与限速，自身节奏/额度/风控逻辑不变。
+                with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix="bosshunter-collect") as pool:
+                    futures = {
+                        pool.submit(run_platform, index, platform): platform
+                        for index, platform in enumerate(order, start=1)
+                    }
+                    for future in as_completed(futures):
+                        platform = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:  # collect 异常已在 run_platform 内兜底；此处防御线程自身错误
+                            result = PlatformCollectionResult(platform, "failed", "network_error", f"{platform} 采集失败", error=str(exc)[:500])
+                        platform_results.append(result)
+                        with self._shared_lock:
+                            all_new_ids.extend(result.new_job_ids)
 
         finally:
             conn.close()
+
 
         unique_new_ids = list(dict.fromkeys(str(job_id) for job_id in all_new_ids if str(job_id)))
         stopped = bool(self.stop_event and self.stop_event.is_set()) or any(r.reason_code == "user_stopped" for r in platform_results)
@@ -475,6 +515,24 @@ class CollectionOrchestrator:
             "results": [result.__dict__ for result in platform_results],
         }
 
+    def _resolve_parallelism(self, platform_count: int) -> int:
+        """1/default = serial (conservative); 0 = all enabled platforms in parallel; N = capped lanes.
+
+        Only the intra-schedule shape changes; per-platform pacing, budgets and
+        risk-control behaviour stay untouched.
+        """
+        collection_cfg = self.config.get("collection", {}) if isinstance(self.config.get("collection"), dict) else {}
+        raw = collection_cfg.get("parallelism", 1)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 1
+        if value == 0:
+            return max(1, platform_count)
+        if value <= 1:
+            return 1
+        return max(1, min(value, platform_count))
+
     @staticmethod
     def _counts(progress: CollectionProgress) -> dict[str, int]:
         return {
@@ -495,25 +553,28 @@ class CollectionOrchestrator:
         platform_new_ids: list[str],
     ) -> None:
         progress.new = len(platform_new_ids) if progress.platform == platform else progress.new
-        states[platform].update({
-            "status": "running", "new": progress.new, "target": progress.target, "percent": progress.percent,
-            "seen": progress.seen, "duplicate": progress.duplicate, "filtered": progress.filtered,
-            "parse_failed": progress.parse_failed, "save_failed": progress.save_failed,
-            "keyword": progress.keyword, "city": progress.city, "page": progress.page,
-            "max_pages": progress.max_pages, "phase": progress.phase, "reason_code": progress.reason_code,
-            "message": progress.message,
-        })
+        with self._shared_lock:
+            states[platform].update({
+                "status": "running", "new": progress.new, "target": progress.target, "percent": progress.percent,
+                "seen": progress.seen, "duplicate": progress.duplicate, "filtered": progress.filtered,
+                "parse_failed": progress.parse_failed, "save_failed": progress.save_failed,
+                "keyword": progress.keyword, "city": progress.city, "page": progress.page,
+                "max_pages": progress.max_pages, "phase": progress.phase, "reason_code": progress.reason_code,
+                "message": progress.message,
+            })
+            ids_snapshot = [*all_new_ids, *platform_new_ids]
+            platforms_snapshot = deepcopy(states)
         callback = self.config.get("_workbench_collect_progress")
         state = {
             **self._counts(progress), "progress": {
                 "run_id": self.run_id, "outcome": "running", "current_platform": platform,
                 "platform_index": progress.platform_index, "platform_total": progress.platform_total,
-                "platforms": deepcopy(states),
+                "platforms": platforms_snapshot,
             },
         }
         if callable(callback):
             callback(state)
-        self._persist(states, [*all_new_ids, *platform_new_ids], platform)
+        self._persist(states, ids_snapshot, platform)
 
     def _emit_scoring(self, states: dict[str, dict[str, Any]], new_ids: list[str]) -> None:
         log = self.config.get("_workbench_log")
