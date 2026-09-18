@@ -816,14 +816,16 @@ class ConfigPageTests(unittest.TestCase):
         self.assertNotIn("prefilter_threshold", self.source)
         self.assertNotIn("预筛阈值", self.source)
 
-    def test_allow_internship_switch_appears_below_deal_breakers(self):
+    def test_internship_mode_select_appears_below_deal_breakers(self):
         # Act
         deal_breakers_index = self.source.index("排除关键词")
-        allow_internship_index = self.source.index("接受实习/管培岗位")
+        internship_mode_index = self.source.index("实习岗位策略")
 
-        # Assert
-        self.assertGreater(allow_internship_index, deal_breakers_index)
-        self.assertIn("profile.allow_internship", self.source)
+        # Assert：三态策略（排除/允许/只要）取代旧布尔开关，仍位于黑名单字段之后
+        self.assertGreater(internship_mode_index, deal_breakers_index)
+        self.assertIn("profile.internship_mode", self.source)
+        for mode in ("exclude", "allow", "only"):
+            self.assertIn(f'"{mode}"', self.source)
 
     def test_config_page_exposes_jd_deal_breakers(self):
         self.assertIn("JD 排除关键词", self.source)

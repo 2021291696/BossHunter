@@ -398,10 +398,19 @@ export default function ConfigPage() {
               <TagsInput value={config.profile?.blocked_companies || []} onChange={v => updateConfig('profile.blocked_companies', v)} placeholder="输入公司名称或关键词" />
               <p className="mt-1 text-xs text-muted">公司名包含这些词时不采集，也不会进入 AI 评分。</p>
             </Field>
-            <div className="flex items-center justify-between">
-              <label className="text-xs text-foreground">接受实习/管培岗位</label>
-              <Switch checked={config.profile?.allow_internship ?? false} onChange={v => updateConfig('profile.allow_internship', v)} />
-            </div>
+            <Field label="实习岗位策略">
+              <Select
+                value={config.profile?.internship_mode || (config.profile?.allow_internship ? 'allow' : 'exclude')}
+                onChange={event => updateConfig('profile.internship_mode', event.target.value)}
+              >
+                <option value="exclude">排除实习（默认）</option>
+                <option value="allow">允许实习</option>
+                <option value="only">只要实习</option>
+              </Select>
+              <p className="mt-1 text-xs text-muted">
+                依据岗位标题与日薪（元/天）信号判断。「只要实习」会在 BOSS 搜索期自动附加实习筛选；判定不到位的岗位由 AI 评分兜底。
+              </p>
+            </Field>
           </div>
         </SectionCard>
 

@@ -48,6 +48,9 @@ SEARCH_URL = "https://www.zhaopin.com/sou/jl{city_code}/"
 DETAIL_BASE_URL = "https://www.zhaopin.com"
 CITY_SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "zhilian_cities.json"
 _INTERNSHIP_TITLE_TERMS = ("实习", "intern", "internship", "管培")
+# 智联原生「实习生」筛选：et=4（jobStatusCode，页面 URL 层已验证）。
+# 该参数只表达「只要实习」，仅在 internship_mode == "only" 时注入。
+INTERNSHIP_JOB_STATUS_PARAM = "et=4"
 LIST_ITEM_CLASSES = ("joblist-box__item", "joblist-item", "job-card")
 TITLE_CLASSES = ("summary-planes__title", "jobinfo__name", "job-name", "job-title")
 SALARY_CLASSES = ("summary-planes__salary", "jobinfo__salary", "job-salary", "salary")
@@ -111,6 +114,26 @@ def _is_internship(title: str) -> bool:
     """判断岗位是否为实习/管培（只查标题）。"""
     t = (title or "").lower()
     return any(s in t for s in _INTERNSHIP_TITLE_TERMS)
+
+
+def internship_search_param(profile: Any) -> str:
+    """only 模式下返回智联原生「实习生」筛选参数（et=4 / jobStatusCode），否则空串。
+
+    与 boss.apply_internship_mode_filter 同一策略：只有 internship_mode == "only"
+    才注入平台原生实习筛选，exclude/allow 模式下 URL 与现状完全一致。
+    """
+    from bosshunter.config import resolve_internship_mode
+
+    mode = resolve_internship_mode(profile if isinstance(profile, dict) else {})
+    return INTERNSHIP_JOB_STATUS_PARAM if mode == "only" else ""
+
+
+def append_internship_search_param(url: str, profile: Any) -> str:
+    """把智联实习筛选参数拼到搜索 URL：已有 query 用 &，没有 query 用 ?。"""
+    param = internship_search_param(profile)
+    if not param:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}{param}"
 
 
 def _city_name_variants(city: str) -> set[str]:
@@ -958,13 +981,21 @@ class ZhilianCollector:
         raise CollectionError("search_not_applied", "智联搜索结果未按目标关键词刷新，已停止采集以避免采到无关岗位")
 
     @staticmethod
-    def build_search_url(request: PlatformCollectionRequest, city: str, keyword: str, page: int) -> str:
+    def build_search_url(
+        request: PlatformCollectionRequest,
+        city: str,
+        keyword: str,
+        page: int,
+        profile: Any = None,
+    ) -> str:
         code = str(request.city_codes.get(city) or "").strip()
         if not code:
             raise CollectionError("no_valid_city", f"未配置智联城市编码：{city}")
         # 智联当前把关键词编码到 /kw.../ 路径中，编码规则由页面脚本生成；
         # 先打开城市搜索页，再通过搜索框提交关键词，避免猜测私有编码。
-        return SEARCH_URL.format(city_code=quote(code))
+        url = SEARCH_URL.format(city_code=quote(code))
+        # only 模式：注入智联原生实习生筛选（et=4），其余模式 URL 与现状一致。
+        return append_internship_search_param(url, profile)
 
     # ------------------------------------------------------------------ API-fetch
     def _evaluate_with_timeout(self, target_id: str, js: str, timeout: float) -> Any:
@@ -1288,7 +1319,9 @@ class ZhilianCollector:
                 target_id: str | None = None
                 try:
                     try:
-                        search_url = self.build_search_url(request, city, keyword, 1)
+                        search_url = self.build_search_url(
+                            request, city, keyword, 1, profile=self.config.get("profile"),
+                        )
                     except CollectionError as exc:
                         return PlatformCollectionResult(self.platform, "failed", exc.code, exc.message)
                     initial_url = "about:blank" if self.browser.navigate_action is not None else search_url

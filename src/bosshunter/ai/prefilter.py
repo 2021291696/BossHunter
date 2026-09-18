@@ -2,10 +2,12 @@
 
 import re
 
+from bosshunter.config import resolve_internship_mode
 from bosshunter.job_filters import matching_blocked_company, matching_deal_breaker
 
 
 _INTERNSHIP_KEYWORDS = ("实习", "intern", "internship", "管培")
+_DAILY_SALARY_PATTERN = re.compile(r"[/／]\s*[天日]")
 _ANONYMOUS_COMPANY_PATTERN = re.compile(
     r"^(?:[\u4e00-\u9fff]{2,4})?某.+(?:公司|企业|集团)$"
 )
@@ -36,8 +38,11 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
     if jd_breaker:
         return 0, f"触发JD排除词: {jd_breaker}"
 
-    if not profile.get("allow_internship", False) and _contains_internship_signal(job):
+    internship_mode = resolve_internship_mode(profile)
+    if internship_mode == "exclude" and _contains_internship_signal(job):
         return 0, "实习/管培岗位"
+    if internship_mode == "only" and not _contains_internship_signal(job):
+        return 0, "非实习岗位（已开启只要实习）"
 
     salary_min = _as_number(profile.get("salary_min", 0))
     salary_max = _as_number(profile.get("salary_max", 0))
@@ -63,7 +68,11 @@ def quick_score(job: dict, config: dict) -> tuple[int, str]:
 
 def _contains_internship_signal(job: dict) -> bool:
     title = (job.get("title") or "").lower()
-    return any(keyword.lower() in title for keyword in _INTERNSHIP_KEYWORDS)
+    if any(keyword.lower() in title for keyword in _INTERNSHIP_KEYWORDS):
+        return True
+    # 日薪/天结薪资是实习岗的强信号（全职极少按天计薪），弥补标题不含"实习"的漏判。
+    salary = str(job.get("salary") or "")
+    return bool(_DAILY_SALARY_PATTERN.search(salary))
 
 
 def _parse_salary_range_k(salary: str) -> tuple[float, float] | None:

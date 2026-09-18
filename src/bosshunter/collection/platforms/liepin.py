@@ -49,6 +49,9 @@ from bosshunter.throttle import SendWindowChecker, should_take_day_off
 
 
 SEARCH_URL = "https://www.liepin.com/zhaopin/?key={keyword}&dqs={code}"
+# 猎聘原生「实习生」筛选：workYearCode=2（2026-09 页面 + API 双向验证）。
+# 该参数只表达「只要实习」，仅在 internship_mode == "only" 时注入。
+INTERNSHIP_WORK_YEAR_PARAM = "workYearCode=2"
 DETAIL_DELAY_MIN_SECONDS = 10.0
 DETAIL_DELAY_MAX_SECONDS = 18.0
 PAGE_DELAY_MIN_SECONDS = 20.0
@@ -224,6 +227,18 @@ def _is_internship(title: str) -> bool:
     return any(s in t for s in _INTERNSHIP_TITLE_TERMS)
 
 
+def internship_search_suffix(profile: Any) -> str:
+    """only 模式下返回猎聘原生「实习生」筛选参数后缀，其余模式返回空串。
+
+    与 boss.apply_internship_mode_filter 同一策略：只有 internship_mode == "only"
+    才注入平台原生实习筛选，exclude/allow 模式下 URL 与现状完全一致。
+    """
+    from bosshunter.config import resolve_internship_mode
+
+    mode = resolve_internship_mode(profile if isinstance(profile, dict) else {})
+    return f"&{INTERNSHIP_WORK_YEAR_PARAM}" if mode == "only" else ""
+
+
 class LiepinCollector:
     platform = "liepin"
 
@@ -247,7 +262,13 @@ class LiepinCollector:
         self.page_delay_range = page_delay_range
 
     @staticmethod
-    def build_search_url(request: PlatformCollectionRequest, city: str, keyword: str, page: int = 1) -> str:
+    def build_search_url(
+        request: PlatformCollectionRequest,
+        city: str,
+        keyword: str,
+        page: int = 1,
+        profile: Any = None,
+    ) -> str:
         code = str(request.city_codes.get(city) or "").strip()
         if not code:
             raise CollectionError("no_valid_city", f"未配置猎聘城市编码：{city}")
@@ -257,6 +278,8 @@ class LiepinCollector:
         if request.sort == "newest":
             # Liepin's "最新" ordering. Harmless if the param is ignored.
             url += "&sortType=2"
+        # only 模式：注入猎聘原生实习生筛选，其余模式 URL 与现状一致。
+        url += internship_search_suffix(profile)
         return url
 
     def _wait(self, hooks: CollectorHooks, seconds: float) -> bool:
@@ -335,6 +358,7 @@ class LiepinCollector:
             return PlatformCollectionResult(self.platform, "completed", "day_off",
                                             "今日随机休息，跳过猎聘采集")
 
+        profile = self.config.get("profile") if isinstance(self.config.get("profile"), dict) else {}
         for city in request.cities:
             for keyword in request.keywords:
                 if (city, keyword) in collected_combos:
@@ -355,7 +379,7 @@ class LiepinCollector:
                     hooks.on_event(phase="completed_keyword", keyword=keyword, city=city,
                                    message=f"猎聘 {keyword} 页级断点已超最大页（{saved_page}/{request.max_pages}），视为已采完，跳过")
                     continue
-                search_url = self.build_search_url(request, city, keyword, page=start_page)
+                search_url = self.build_search_url(request, city, keyword, page=start_page, profile=profile)
                 initial_url = "about:blank" if self.browser.navigate_action is not None else search_url
                 target_id = self.browser.new_tab(initial_url, background=True)
                 if not target_id:
@@ -371,7 +395,7 @@ class LiepinCollector:
                             hooks.on_event(phase="pacing", keyword=keyword, city=city, page=page, message=f"翻页安全间隔 {detail_req:.1f} 秒")
                             if self._wait(hooks, detail_req):
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
-                            if not self._navigate(hooks, target_id, self.build_search_url(request, city, keyword, page=page), "猎聘翻页"):
+                            if not self._navigate(hooks, target_id, self.build_search_url(request, city, keyword, page=page, profile=profile), "猎聘翻页"):
                                 return PlatformCollectionResult(self.platform, "failed", "browser_disconnected", "猎聘翻页导航失败")
                         hooks.on_event(phase="loading_list", keyword=keyword, city=city, page=page)
                         self.browser.wait_for_load(target_id, timeout=15)
