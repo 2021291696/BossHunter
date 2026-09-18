@@ -11,6 +11,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Save, RotateCcw, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { PLATFORM_LABELS, PLATFORM_SHORT_LABELS } from '@/lib/platforms'
+import { buildSyncFromBoss } from '@/lib/bossSync'
 
 const AI_SERVICES = {
   anthropic: {
@@ -69,6 +70,7 @@ export default function ConfigPage() {
   const [zhilianCityOptions, setZhilianCityOptions] = useState<CityOption[]>([])
   const [job51CityOptions, setJob51CityOptions] = useState<CityOption[]>([])
   const [liepinCityOptions, setLiepinCityOptions] = useState<CityOption[]>([])
+  const [syncNote, setSyncNote] = useState<{ platform: PlatformId; ok: boolean; text: string } | null>(null)
   const [cityRefreshing, setCityRefreshing] = useState(false)
   const [cityMessage, setCityMessage] = useState('')
 
@@ -247,6 +249,26 @@ export default function ConfigPage() {
     updateConfig('collection.default_order', nextOrder.length ? nextOrder : ['boss'])
   }
 
+  const handleSyncFromBoss = (platform: PlatformId) => {
+    const platformCityOptions = platform === 'zhilian' ? zhilianCityOptions : platform === 'liepin' ? liepinCityOptions : job51CityOptions
+    const outcome = buildSyncFromBoss(platformSearch('boss'), platformCityOptions)
+    if (!outcome) {
+      setSyncNote({ platform, ok: false, text: '请先在 BOSS 直聘填写搜索关键词' })
+      return
+    }
+    updateConfig(`platforms.${platform}.search.keywords`, outcome.keywords)
+    updateConfig(`platforms.${platform}.search.cities`, outcome.cities)
+    updateConfig(`platforms.${platform}.search.city_codes`, outcome.city_codes)
+    updateConfig(`platforms.${platform}.search.max_pages`, outcome.max_pages)
+    setSyncNote({
+      platform,
+      ok: true,
+      text: outcome.skippedCities.length
+        ? `已同步到${PLATFORM_LABELS[platform]}（尚未保存）；${outcome.skippedCities.join('、')} 未收录进城市目录，未同步`
+        : `已同步到${PLATFORM_LABELS[platform]}（尚未保存），点击右上角保存后生效`,
+    })
+  }
+
   const setCollectionOrder = (value: string) => {
     const enabled = (['boss', 'zhilian', '51job', 'liepin'] as PlatformId[]).filter(platform => config?.platforms?.[platform]?.enabled !== false)
     const requested = value.split(',').filter((item): item is PlatformId => item === 'boss' || item === 'zhilian' || item === '51job' || item === 'liepin')
@@ -406,8 +428,26 @@ export default function ConfigPage() {
                       <input type="checkbox" checked={enabled} onChange={event => setPlatformEnabled(platform, event.target.checked)} className="h-4 w-4 accent-primary" />
                       {label}
                     </label>
-                    <span className="text-xs text-muted">{enabled ? '已启用' : '未启用'}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted">{enabled ? '已启用' : '未启用'}</span>
+                      {platform !== 'boss' && enabled && (() => {
+                        const bossSearchForSync = platformSearch('boss')
+                        const hasBossKeywords = Array.isArray(bossSearchForSync.keywords) && bossSearchForSync.keywords.some((item: unknown) => String(item).trim())
+                        return (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={!hasBossKeywords}
+                            title={!hasBossKeywords ? '请先在 BOSS 直聘填写搜索关键词' : `把 BOSS 的关键词/城市/页数复制到${label}（城市逐个对照${PLATFORM_SHORT_LABELS[platform]}目录，未收录的跳过）`}
+                            onClick={() => handleSyncFromBoss(platform)}
+                          >从 BOSS 同步</Button>
+                        )
+                      })()}
+                    </div>
                   </div>
+                  {syncNote?.platform === platform && (
+                    <p className={`mt-2 rounded-lg px-3 py-2 text-xs ${syncNote.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{syncNote.text}</p>
+                  )}
                   {enabled && <div className="mt-4 space-y-3">
                     <Field label="搜索关键词" hint={platform === 'boss' ? '输入岗位后请按回车键确认，多岗位用","隔开，否则配置无法保存。' : undefined}>
                       <TagsInput value={Array.isArray(search.keywords) ? search.keywords : []} onChange={value => updatePlatformSearch(platform, 'keywords', value)} placeholder="如：人力、产品运营" />
