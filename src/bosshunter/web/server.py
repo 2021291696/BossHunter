@@ -3072,9 +3072,8 @@ def api_jobs_soft_delete():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
-			if conflict is not None:
-				return conflict
+			# 纯 DB 状态操作不查 active task：后台任务（如 AI 评分）运行期间允许移入回收站，
+			# 评分循环会按 deleted_at 跳过已删岗位（jobs 表查询本就过滤 deleted_at IS NULL）。
 			result = soft_delete_jobs(
 				db,
 				job_ids,
@@ -3094,9 +3093,6 @@ def api_jobs_restore():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
-			if conflict is not None:
-				return conflict
 			result = restore_jobs(db, job_ids, confirmed=body.get("confirmed") is True)
 		return _json_response(result)
 	except (ValueError, JobDeletionConflictError) as exc:
@@ -3111,9 +3107,6 @@ def api_jobs_manual_sent():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
-			if conflict is not None:
-				return conflict
 			result = mark_external_jobs_sent(
 				db,
 				job_ids,
@@ -3132,9 +3125,6 @@ def api_jobs_permanent_delete():
 	try:
 		body, job_ids = _job_action_payload()
 		with job_mutation_lock:
-			conflict = _active_task_mutation_error()
-			if conflict is not None:
-				return conflict
 			result = permanent_delete_jobs(
 				db,
 				job_ids,
