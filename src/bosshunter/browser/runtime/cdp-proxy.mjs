@@ -95,6 +95,12 @@ async function discoverChromePort() {
       if (port > 0 && port < 65536 && await checkPort(port)) {
         const wsPath = lines[1] || null;
         const version = await getChromeVersion(port);
+        // A stale DevToolsActivePort can leave a port that accepts TCP but no
+        // longer speaks CDP; require a real /json/version before trusting it,
+        // otherwise fall through to the COMMON_PORTS probe below.
+        if (!version?.webSocketDebuggerUrl) {
+          continue;
+        }
         const browserName = filePath.includes('Chromium')
           ? 'Chromium'
           : filePath.includes('Chrome Canary')
